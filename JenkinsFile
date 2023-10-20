@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+    tools {
+        maven 'maven'
+    }
+    stages {
+        stage('Checkout, Build and Package') {
+            steps {
+                    checkout scm
+                    sh 'mvn clean package'
+                    echo 'Packaged!!'
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'SonarQube-Scanner'
+                    withSonarQubeEnv() {
+                        sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=pipeline-test-v2 -Dsonar.sources=. -Dsonar.java.binaries=target/classes"
+                    }
+                    echo 'Sonar Analysis Performed'
+                }
+            }
+        }
+        stage('Quality Gate Status') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-webhook'
+                }
+                echo 'Quality Gate Performed'
+            }
+        }
+        stage('Upload Artifact to Nexus') {
+            steps {
+                script {
+                    nexusArtifactUploader artifacts: [
+                        [artifactId: 'spring-boot-demo', classifier: '', file: 'target/spring-boot-web.jar', type: 'jar']
+                    ],
+                    credentialsId: 'nexus-auth',
+                    groupId: 'com.abhishek',
+                    nexusUrl: '20.62.5.145:8081',
+                    nexusVersion: 'nexus3',
+                    protocol: 'http',
+                    repository: 'pipeline-v2-test', // Updated repository name here
+                    version: '1.0'
+                }
+                echo 'Uploading Artifact to Nexus'
+            }
+        }
+
+        stage('Check Artifact in Nexus') {
+            steps {
+                script {
+                    def nexusUrl = '20.62.5.145:8081' // Replace with your Nexus URL
+                    def repository = 'pipeline-v2-test' // Replace with your Nexus repository name
+                    def groupId = 'com.abhishek' // Replace with your Maven group ID
+                    def artifactId = 'spring-boot-demo' // Replace with your Maven artifact ID
+                    def version = '1.0' // Replace with the expected version
+
+                    def nexusArtifact = "${groupId}/${artifactId}/${version}/${artifactId}-${version}.jar"
+                    def nexusArtifactUrl = "${nexusUrl}/repository/${repository}/${nexusArtifact}"
+
+                    // Use curl to check if the artifact exists in Nexus
+                    def curlCommand = "curl -I -s ${nexusArtifactUrl}"
+
+                    def result = sh(script: curlCommand, returnStatus: true)
+                    
+                    if (result == 0) {
+                        echo "Artifact found in Nexus: ${nexusArtifactUrl}"
+                    } else {
+                        error "Artifact not found in Nexus: ${nexusArtifactUrl}"
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            echo 'Build successful!'
+            archiveArtifacts 'target/*.jar' // Adjust path for artifacts
+        }
+        failure {
+            echo 'Build failed!'
+        }
+    }
+}
